@@ -29,6 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
+import { toast } from "sonner";
 import { z } from "zod";
 
 // Flow states with display names
@@ -70,18 +71,42 @@ export const FlowRunStateDialog = ({
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const { setFlowRunState } = useSetFlowRunState();
 
+	// Find first state that is not the current state for default value
+	const getDefaultState = (): FlowStates => {
+		if (!flowRun.state?.type) return "PENDING";
+
+		const currentState = flowRun.state.type;
+		const allStates = Object.keys(FLOW_STATES) as FlowStates[];
+
+		const alternativeState = allStates.find((state) => state !== currentState);
+		return alternativeState || "PENDING";
+	};
+
 	const form = useForm<FlowRunStateFormValues>({
 		resolver: zodResolver(formSchema),
 		defaultValues: {
-			state: (flowRun.state?.type as FlowStates) || "PENDING",
+			state: getDefaultState(),
 			message: "",
 			force: false,
 		},
 	});
 
+	// Get the current state from the form
+	const selectedState = form.watch("state");
+	const isCurrentState = selectedState === flowRun.state?.type;
+
+	// Check if form can be submitted (state has changed)
+	const isSubmitDisabled = isSubmitting || isCurrentState;
+
 	const onSubmit = (values: FlowRunStateFormValues) => {
+		// Don't submit if the state hasn't changed
+		if (isCurrentState) {
+			return;
+		}
+
 		setIsSubmitting(true);
 
+		// Make the API call to change the state
 		setFlowRunState(
 			{
 				id: flowRun.id,
@@ -91,12 +116,23 @@ export const FlowRunStateDialog = ({
 			},
 			{
 				onSuccess: () => {
+					toast.success(
+						<div className="flex items-center gap-2">
+							Flow run state changed to{" "}
+							<StateBadge
+								type={values.state}
+								name={FLOW_STATES[values.state]}
+							/>
+						</div>,
+					);
 					setIsSubmitting(false);
 					onOpenChange(false);
 				},
 				onError: (error) => {
+					const message =
+						error.message || "Unknown error while changing flow run state.";
+					toast.error(message);
 					setIsSubmitting(false);
-					// add error handling here?
 					console.error("Error changing flow run state:", error);
 				},
 			},
@@ -189,17 +225,25 @@ export const FlowRunStateDialog = ({
 							)}
 						/>
 
-						<div className="flex justify-end space-x-2 pt-4">
-							<Button
-								type="button"
-								variant="outline"
-								onClick={() => onOpenChange(false)}
-							>
-								Close
-							</Button>
-							<Button type="submit" disabled={isSubmitting}>
-								Change
-							</Button>
+						<div className="flex flex-col gap-2 pt-4">
+							{isCurrentState && (
+								<p className="text-sm text-muted-foreground">
+									Please select a different state than the current one to
+									continue
+								</p>
+							)}
+							<div className="flex justify-end space-x-2">
+								<Button
+									type="button"
+									variant="outline"
+									onClick={() => onOpenChange(false)}
+								>
+									Close
+								</Button>
+								<Button type="submit" disabled={isSubmitDisabled}>
+									Change
+								</Button>
+							</div>
 						</div>
 					</form>
 				</Form>

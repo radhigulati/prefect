@@ -1,22 +1,24 @@
 import type { FlowRun } from "@/api/flow-runs";
+import type { components } from "@/api/prefect";
 import { Button } from "@/components/ui/button";
-import { reactQueryDecorator } from "@/storybook/utils";
+import { reactQueryDecorator, toastDecorator } from "@/storybook/utils";
 import type { Meta, StoryObj } from "@storybook/react";
+import { fn } from "@storybook/test";
+import { buildApiUrl } from "@tests/utils/handlers";
+import { http, HttpResponse } from "msw";
+import { useState } from "react";
 import { FlowRunStateDialog } from "./flow-run-state-dialog";
 import { useFlowRunStateDialog } from "./use-flow-run-state-dialog";
 
-// Create a base mock flow run with required properties
-const createMockFlowRun = (overrides: Partial<FlowRun> = {}): FlowRun => ({
+// Create a base mock flow run with only the required properties
+type MockFlowRun = Pick<FlowRun, "id" | "name" | "state">;
+
+const createMockFlowRun = (
+	overrides: Partial<MockFlowRun> = {},
+): MockFlowRun => ({
 	id: "mock-flow-run-id",
-	created: "2023-10-15T10:00:00Z",
-	updated: "2023-10-15T10:30:00Z",
 	name: "Mock Flow Run",
-	flow_id: "mock-flow-id",
-	total_run_time: 1800,
-	estimated_run_time: 1800,
-	estimated_start_time_delta: 0,
-	auto_scheduled: false,
-	run_count: 1,
+	state: undefined,
 	...overrides,
 });
 
@@ -26,12 +28,12 @@ const completedFlowRun = createMockFlowRun({
 	name: "Completed Flow Run",
 	state: {
 		id: "state-id-1",
-		type: "COMPLETED",
+		type: "COMPLETED" as components["schemas"]["StateType"],
 		name: "Completed",
 		timestamp: "2023-10-15T10:30:00Z",
 		message: "Flow run completed successfully",
 	},
-});
+}) as FlowRun;
 
 // Mock flow run with FAILED state
 const failedFlowRun = createMockFlowRun({
@@ -39,41 +41,12 @@ const failedFlowRun = createMockFlowRun({
 	name: "Failed Flow Run",
 	state: {
 		id: "state-id-2",
-		type: "FAILED",
+		type: "FAILED" as components["schemas"]["StateType"],
 		name: "Failed",
 		timestamp: "2023-10-15T11:15:00Z",
 		message: "Flow run failed with an error",
 	},
-	total_run_time: 900,
-});
-
-// Mock flow run with CANCELLED state
-const cancelledFlowRun = createMockFlowRun({
-	id: "mock-flow-run-id-3",
-	name: "Cancelled Flow Run",
-	state: {
-		id: "state-id-3",
-		type: "CANCELLED",
-		name: "Cancelled",
-		timestamp: "2023-10-15T12:05:00Z",
-		message: "Flow run cancelled by user",
-	},
-	total_run_time: 300,
-});
-
-// Mock flow run with RUNNING state
-const runningFlowRun = createMockFlowRun({
-	id: "mock-flow-run-id-4",
-	name: "Running Flow Run",
-	state: {
-		id: "state-id-4",
-		type: "RUNNING",
-		name: "Running",
-		timestamp: "2023-10-15T13:00:00Z",
-		message: "Flow run is in progress",
-	},
-	estimated_run_time: 3600,
-});
+}) as FlowRun;
 
 // ------- Dialog Component Stories -------
 
@@ -83,7 +56,7 @@ const meta: Meta<typeof FlowRunStateDialog> = {
 	parameters: {
 		layout: "centered",
 	},
-	decorators: [reactQueryDecorator],
+	decorators: [reactQueryDecorator, toastDecorator],
 	argTypes: {},
 };
 
@@ -94,7 +67,7 @@ type Story = StoryObj<typeof FlowRunStateDialog>;
 const baseStory: Story = {
 	args: {
 		open: true,
-		onOpenChange: (open) => console.log(`Dialog open state: ${open}`),
+		onOpenChange: fn(),
 	},
 	parameters: {
 		docs: {
@@ -105,6 +78,7 @@ const baseStory: Story = {
 	},
 };
 
+// Basic state stories showing different initial states
 export const CompletedFlowRun: Story = {
 	...baseStory,
 	args: {
@@ -121,53 +95,104 @@ export const FailedFlowRun: Story = {
 	},
 };
 
-export const CancelledFlowRun: Story = {
-	...baseStory,
-	args: {
-		...baseStory.args,
-		flowRun: cancelledFlowRun,
-	},
-};
+// ------- Full Lifecycle Demo with Hook and Toast -------
 
-export const RunningFlowRun: Story = {
-	...baseStory,
-	args: {
-		...baseStory.args,
-		flowRun: runningFlowRun,
-	},
-};
-
-// ------- Hook Usage Example -------
-
-// Component that demonstrates how to use the useFlowRunStateDialog hook
-const HookUsageDemo = () => {
+// Component demonstrating the complete flow with automatic dialog close and toast notification
+const FullLifecycleDemo = () => {
 	const [dialogState, openDialog] = useFlowRunStateDialog();
+	const [isOpen, setIsOpen] = useState(false);
+
+	// Custom handler to track local state
+	const handleOpenChange = (open: boolean) => {
+		setIsOpen(open);
+		dialogState.onOpenChange(open);
+	};
 
 	return (
 		<div className="space-y-4">
 			<div className="p-4 border rounded-lg">
-				<h2 className="text-lg font-medium mb-2">Hook Usage Example</h2>
+				<h2 className="text-lg font-medium mb-2">Complete Flow Demo</h2>
 				<p className="mb-4">
-					Click the button below to open the dialog using the hook
+					This demonstrates the full lifecycle including toast notifications:
 				</p>
-				<Button onClick={() => openDialog(completedFlowRun)}>
+				<ol className="list-decimal pl-6 mb-4 space-y-1">
+					<li>Click the button to open the dialog</li>
+					<li>Select a different state and submit the form</li>
+					<li>The dialog will close</li>
+					<li>A toast notification will appear showing the state change</li>
+				</ol>
+				<Button
+					onClick={() => {
+						openDialog(completedFlowRun);
+						setIsOpen(true);
+					}}
+					disabled={isOpen}
+				>
 					Change Flow Run State
 				</Button>
+				{isOpen ? (
+					<p className="text-sm text-muted-foreground mt-2">
+						Dialog is open - complete the form to see toast notification
+					</p>
+				) : (
+					<p className="text-sm text-muted-foreground mt-2">
+						Dialog is closed - click the button to open it
+					</p>
+				)}
 			</div>
 
-			<FlowRunStateDialog {...dialogState} />
+			<FlowRunStateDialog
+				{...dialogState}
+				open={isOpen}
+				onOpenChange={handleOpenChange}
+			/>
 		</div>
 	);
 };
 
-export const WithHook: StoryObj<typeof HookUsageDemo> = {
-	render: () => <HookUsageDemo />,
+// Demo that showcases success flow
+export const SuccessDemo: StoryObj<typeof FullLifecycleDemo> = {
+	name: "Success Flow with Toast",
+	render: () => <FullLifecycleDemo />,
 	parameters: {
 		docs: {
 			description: {
 				story:
-					"Example of using the useFlowRunStateDialog hook to manage the dialog state",
+					"Shows the complete flow with successful state change and toast notification",
 			},
+		},
+		msw: {
+			handlers: [
+				http.post(buildApiUrl("/flow_runs/:id/set_state"), () => {
+					return HttpResponse.json({ state: { type: "FAILED" } });
+				}),
+			],
+		},
+	},
+};
+
+// Demo that showcases error flow
+export const ErrorDemo: StoryObj<typeof FullLifecycleDemo> = {
+	name: "Error Flow with Toast",
+	render: () => <FullLifecycleDemo />,
+	parameters: {
+		docs: {
+			description: {
+				story:
+					"Shows the complete flow with error during state change and error toast",
+			},
+		},
+		msw: {
+			handlers: [
+				http.post(buildApiUrl("/flow_runs/:id/set_state"), () => {
+					return HttpResponse.json(
+						{
+							detail: "Error: Unable to change flow run state - access denied",
+						},
+						{ status: 403 },
+					);
+				}),
+			],
 		},
 	},
 };
